@@ -166,4 +166,14 @@ func generateWarpConfig(licenseKey *C.char, accountId *C.char, accessToken *C.ch
 	return C.CString(string(responseJson))
 }
 
+//export CoreStartProbeFromConfig
+func CoreStartProbeFromConfig(configContent *C.char) (CErr *C.char) {
+	return emptyOrErrorC(v2.CoreStartProbeFromConfig(C.GoString(configContent)))
+}
+
+//export CoreStopProbe
+func CoreStopProbe() (CErr *C.char) {
+	return emptyOrErrorC(v2.CoreStopProbe())
+}
+
 func main() {}
