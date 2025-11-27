@@ -19,21 +19,85 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
+type SetupOptions struct {
+	BasePath   string
+	WorkingDir string
+	TempDir    string
+	StatusPort int64
+	Debug      bool
+}
+
+var coreSetupOptions = SetupOptions{
+	BasePath:   "./",
+	WorkingDir: "./",
+	TempDir:    "./tmp",
+	StatusPort: 0,
+	Debug:      false,
+}
+
+// ConfigureSetupOptions allows mobile/FFI clients to override the default paths
+// used by StartCoreWithConfig. This keeps the setup parameters configurable
+// without relying on CLI-specific defaults.
+func ConfigureSetupOptions(opts SetupOptions) {
+	if opts.BasePath != "" {
+		coreSetupOptions.BasePath = opts.BasePath
+	}
+	if opts.WorkingDir != "" {
+		coreSetupOptions.WorkingDir = opts.WorkingDir
+	}
+	if opts.TempDir != "" {
+		coreSetupOptions.TempDir = opts.TempDir
+	}
+	if opts.StatusPort != 0 {
+		coreSetupOptions.StatusPort = opts.StatusPort
+	}
+	coreSetupOptions.Debug = opts.Debug
+}
+
+// StartCoreWithConfig starts a core instance from a pre-built configuration.
+// This helper is intended for FFI/mobile clients and does not block or attach
+// any CLI/signal handling. Callers must pair it with StopCore when finished.
+func StartCoreWithConfig(cfg ConfigResult) error {
+	useFlutterBridge = false
+	if cfg.Config == "" {
+		return fmt.Errorf("config content is empty")
+	}
+
+	// TODO: allow passing setup paths directly per call instead of relying on
+	// global defaults so platform-specific paths (e.g., Android context) can be
+	// supplied by the caller.
+	if err := Setup(coreSetupOptions.BasePath, coreSetupOptions.WorkingDir, coreSetupOptions.TempDir, coreSetupOptions.StatusPort, coreSetupOptions.Debug); err != nil {
+		return fmt.Errorf("failed to set up core: %w", err)
+	}
+
+	go StartService(&pb.StartRequest{
+		ConfigContent:          cfg.Config,
+		EnableOldCommandServer: false,
+		DelayStart:             false,
+		EnableRawConfig:        true,
+	})
+
+	return nil
+}
+
+// StopCore stops a previously started core instance. This is a lightweight
+// wrapper for FFI/mobile clients that mirrors StartCoreWithConfig.
+func StopCore() error {
+	_, err := Stop()
+	return err
+}
+
 func RunStandalone(hiddifySettingPath string, configPath string, defaultConfig config.HiddifyOptions) error {
 	fmt.Println("Running in standalone mode")
-	useFlutterBridge = false
 	current, err := readAndBuildConfig(hiddifySettingPath, configPath, &defaultConfig)
 	if err != nil {
 		fmt.Printf("Error in read and build config %v", err)
 		return err
 	}
 
-	go StartService(&pb.StartRequest{
-		ConfigContent:          current.Config,
-		EnableOldCommandServer: false,
-		DelayStart:             false,
-		EnableRawConfig:        true,
-	})
+	if err := StartCoreWithConfig(current); err != nil {
+		return err
+	}
 	go updateConfigInterval(current, hiddifySettingPath, configPath)
 
 	sigChan := make(chan os.Signal, 1)
@@ -42,7 +106,7 @@ func RunStandalone(hiddifySettingPath string, configPath string, defaultConfig c
 	fmt.Printf("Waiting for CTRL+C to stop\n")
 	<-sigChan
 	fmt.Printf("CTRL+C recived-->stopping\n")
-	_, err = Stop()
+	err = StopCore()
 
 	return err
 }
@@ -175,10 +239,6 @@ func buildConfig(configContent string, options config.HiddifyOptions) (string, e
 	}
 
 	fmt.Printf("Open http://localhost:6756/ui/?secret=%s in your browser\n", finalconfig.Experimental.ClashAPI.Secret)
-
-	if err := Setup("./", "./", "./tmp", 0, false); err != nil {
-		return "", fmt.Errorf("failed to set up global configuration: %w", err)
-	}
 
 	configStr, err := config.ToJson(*finalconfig)
 	if err != nil {
